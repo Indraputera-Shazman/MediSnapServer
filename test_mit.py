@@ -8,8 +8,8 @@ from firebase_admin import credentials
 from firebase_admin import firestore
 
 # --- 1. SETUP CLOUD SERVICES ---
-os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = r'C:\Users\indra\OneDrive\Desktop\IDP\leafy-oxide-473706-d2-d49bf6b85904.json'
-cred = credentials.Certificate(r'C:\Users\indra\OneDrive\Desktop\IDP\firebase_key.json')
+os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = 'google_key.json'
+cred = credentials.Certificate('firebase_key.json')
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
