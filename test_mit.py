@@ -16,8 +16,8 @@ db = firestore.client()
 # --- 2. SETUP FLASK SERVER ---
 app = Flask(__name__)
 
-def process_and_upload(image_path):
-    print("\n[SERVER] Processing new image...")
+def process_and_upload(image_path, patient_id):
+    print(f"\n[SERVER] Processing new image for patient: {patient_id}")
     client = vision.ImageAnnotatorClient()
 
     with open(image_path, "rb") as image_file:
@@ -34,17 +34,15 @@ def process_and_upload(image_path):
     word_annotations = texts[1:]
     
     valid_numbers = []
-    labels_y = {} # Store the Y-coordinates of found labels
+    labels_y = {} 
     
     # STEP 1: Scan all words for numbers and labels
     for word in word_annotations:
         text = word.description.lower()
         y_coord = word.bounding_poly.vertices[0].y
         
-        # Strip out punctuation to catch things like "SYS." or "SYS/DIA"
         clean_text = re.sub(r'[^a-z]', '', text)
         
-        # Check for labels
         if 'sys' in clean_text:
             labels_y['sys'] = y_coord
         elif 'dia' in clean_text:
@@ -52,7 +50,6 @@ def process_and_upload(image_path):
         elif 'pul' in clean_text or 'bpm' in clean_text or 'bp' in clean_text:
             labels_y['bpm'] = y_coord
             
-        # Check for valid BP/Pulse numbers (2-3 digits)
         if word.description.isdigit() and 2 <= len(word.description) <= 3:
             valid_numbers.append({'value': int(word.description), 'y': y_coord})
 
@@ -63,14 +60,11 @@ def process_and_upload(image_path):
     # STEP 2: Match numbers to labels
     if len(valid_numbers) >= 2:
         
-        # Helper function to find and remove the number closest to a label's Y-coordinate
         def pop_closest_number(target_y):
             if not valid_numbers: return None
-            # Find the number with the smallest difference in Y-coordinate
             closest_idx = min(range(len(valid_numbers)), key=lambda i: abs(valid_numbers[i]['y'] - target_y))
             return valid_numbers.pop(closest_idx)['value']
 
-        # If we found labels, assign the numbers right next to them
         if 'sys' in labels_y:
             systolic = pop_closest_number(labels_y['sys'])
         if 'dia' in labels_y:
@@ -79,7 +73,6 @@ def process_and_upload(image_path):
             heart_rate = pop_closest_number(labels_y['bpm'])
             
         # STEP 3: Fallback mechanism
-        # If any labels were missing due to glare, sort whatever numbers are left top-to-bottom
         valid_numbers = sorted(valid_numbers, key=lambda k: k['y'])
         
         if systolic is None and valid_numbers:
@@ -91,10 +84,9 @@ def process_and_upload(image_path):
             
         print(f"[SERVER] Parsed -> SYS: {systolic}, DIA: {diastolic}, BPM: {heart_rate}")
         
-        # Ensure we at least got SYS and DIA before uploading
         if systolic and diastolic:
             health_data = {
-                'patient_id': 'patient_001',
+                'patient_id': patient_id,  # <--- Using the dynamic ID here
                 'systolic': systolic,
                 'diastolic': diastolic,
                 'heart_rate': heart_rate,
@@ -113,17 +105,21 @@ def process_and_upload(image_path):
 def handle_upload():
     print("\n[SERVER] Receiving connection from app...")
     
+    # Grab the patient_id from the URL (defaults to 'unknown_patient' if not provided)
+    patient_id = request.args.get('patient_id', 'unknown_patient')
+    
     file_data = request.get_data()
     
     if not file_data:
         return "No image data received", 400
         
-    temp_image_path = "temp_patient_reading.jpg"
+    temp_image_path = f"temp_{patient_id}_reading.jpg"
     
     with open(temp_image_path, "wb") as f:
         f.write(file_data)
         
-    process_and_upload(temp_image_path)
+    # Pass the ID into the processing function
+    process_and_upload(temp_image_path, patient_id)
     
     return "Upload and Processing Complete!", 200
 
