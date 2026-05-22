@@ -7,6 +7,7 @@ from firebase_admin import credentials
 from firebase_admin import firestore
 
 # --- 1. SETUP CLOUD SERVICES ---
+# Make sure these two JSON files are in the EXACT SAME FOLDER as this script
 os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = 'google_key.json'
 cred = credentials.Certificate('firebase_key.json')
 firebase_admin.initialize_app(cred)
@@ -89,7 +90,9 @@ def process_and_upload(image_content):
             if heart_rate: health_data['heart_rate'] = heart_rate
             if blood_sugar: health_data['blood_sugar'] = blood_sugar
             
+            # ---> THIS IS THE LINE THAT UPLOADS TO FIREBASE <---
             db.collection('readings').add(health_data)
+            
             print("[SERVER] SUCCESS: Uploaded to Firebase!")
             return {"status": "success", "message": "Data saved successfully."}
         else:
