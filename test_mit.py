@@ -1,5 +1,4 @@
 import os
-import re
 import datetime
 from flask import Flask, request
 from google.cloud import vision
@@ -16,7 +15,6 @@ db = firestore.client()
 # --- 2. SETUP FLASK SERVER ---
 app = Flask(__name__)
 
-# This is your exact same OCR code, just packed into a function!
 def process_and_upload(image_path):
     print("\n[SERVER] Processing new image...")
     client = vision.ImageAnnotatorClient()
@@ -32,13 +30,30 @@ def process_and_upload(image_path):
         print("[SERVER] No text found.")
         return
 
-    raw_text = texts[0].description
-    numbers = re.findall(r'\d+', raw_text)
+    # texts[0] is the entire block of text. texts[1:] are the individual words.
+    word_annotations = texts[1:]
     
-    if len(numbers) >= 2:
-        systolic = int(numbers[0])
-        diastolic = int(numbers[1])
-        heart_rate = int(numbers[2]) if len(numbers) >= 3 else None
+    # Store found numbers and their vertical (Y) position
+    valid_numbers = []
+    
+    for word in word_annotations:
+        text = word.description
+        
+        # Only keep text that is entirely digits AND is 2 or 3 characters long.
+        # This ignores memory slots like "1" and years like "2024".
+        if text.isdigit() and 2 <= len(text) <= 3:
+            # Get the top-left Y coordinate of the word's bounding box
+            y_coord = word.bounding_poly.vertices[0].y
+            valid_numbers.append({'value': int(text), 'y': y_coord})
+            
+    # Sort the numbers top-to-bottom based on their Y coordinate on the screen
+    valid_numbers = sorted(valid_numbers, key=lambda k: k['y'])
+
+    if len(valid_numbers) >= 2:
+        # Assuming standard BP monitor layout: Top = SYS, Middle = DIA, Bottom = BPM
+        systolic = valid_numbers[0]['value']
+        diastolic = valid_numbers[1]['value']
+        heart_rate = valid_numbers[2]['value'] if len(valid_numbers) >= 3 else None
         
         print(f"[SERVER] Parsed -> SYS: {systolic}, DIA: {diastolic}, BPM: {heart_rate}")
         
@@ -53,7 +68,7 @@ def process_and_upload(image_path):
         db.collection('readings').add(health_data)
         print("[SERVER] SUCCESS: Uploaded to Firebase!")
     else:
-        print("[SERVER] Error: Not enough numbers found.")
+        print(f"[SERVER] Error: Not enough valid numbers found. Found: {[n['value'] for n in valid_numbers]}")
 
 # --- 3. THE LISTENER ---
 # This waits for your phone to send the file to /upload
