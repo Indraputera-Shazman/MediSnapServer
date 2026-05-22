@@ -33,31 +33,13 @@ def process_and_upload(image_path):
         return
 
     raw_text = texts[0].description
+    numbers = re.findall(r'\d+', raw_text)
     
-    # --- UPGRADED OCR PARSING LOGIC ---
-    systolic = None
-    diastolic = None
-    heart_rate = None
-    
-    # Break the text into individual lines and convert to lowercase
-    lines = raw_text.lower().split('\n')
-    
-    # Check each line for labels and grab the number attached to it
-    for line in lines:
-        nums_in_line = re.findall(r'\d+', line)
+    if len(numbers) >= 2:
+        systolic = int(numbers[0])
+        diastolic = int(numbers[1])
+        heart_rate = int(numbers[2]) if len(numbers) >= 3 else None
         
-        if nums_in_line:
-            val = int(nums_in_line[0])
-            
-            if 'sys' in line:
-                systolic = val
-            elif 'dia' in line:
-                diastolic = val
-            elif 'bp' in line or 'bpm' in line or 'pul' in line or 'pr' in line:
-                heart_rate = val
-    # ----------------------------------
-
-    if systolic is not None and diastolic is not None:
         print(f"[SERVER] Parsed -> SYS: {systolic}, DIA: {diastolic}, BPM: {heart_rate}")
         
         health_data = {
@@ -71,7 +53,7 @@ def process_and_upload(image_path):
         db.collection('readings').add(health_data)
         print("[SERVER] SUCCESS: Uploaded to Firebase!")
     else:
-        print("[SERVER] Error: Could not find SYS and DIA labels with numbers.")
+        print("[SERVER] Error: Not enough numbers found.")
 
 # --- 3. THE LISTENER ---
 # This waits for your phone to send the file to /upload
