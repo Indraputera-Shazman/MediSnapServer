@@ -3,6 +3,8 @@ import re
 import datetime
 from flask import Flask, request
 from google.cloud import vision
+from PIL import Image, ImageEnhance, ImageFilter
+import io
 import firebase_admin
 from firebase_admin import credentials
 from firebase_admin import firestore
@@ -15,6 +17,31 @@ db = firestore.client()
 
 # --- 2. SETUP FLASK SERVER ---
 app = Flask(__name__)
+
+
+def preprocess_image(image_path):
+    """
+    Preprocess the image to improve OCR accuracy on LCD displays.
+    LCD segments can be misread as CJK characters (e.g. "100" → "昌") when
+    the image has low contrast or color noise. This converts to high-contrast
+    grayscale which forces Vision to treat segments as Latin digits.
+
+    Returns: image bytes ready for the Vision API.
+    """
+    img = Image.open(image_path).convert('L')  # grayscale
+
+    # Boost contrast so LCD digits are crisp black on white background
+    img = ImageEnhance.Contrast(img).enhance(2.5)
+    img = ImageEnhance.Sharpness(img).enhance(2.0)
+
+    # Upscale if image is small — Vision performs better on larger text
+    w, h = img.size
+    if w < 800:
+        img = img.resize((w * 2, h * 2), Image.LANCZOS)
+
+    buf = io.BytesIO()
+    img.save(buf, format='JPEG', quality=95)
+    return buf.getvalue()
 
 
 def parse_full_text(full_text):
@@ -187,9 +214,10 @@ def process_and_upload(image_path, patient_id):
     print(f"\n[SERVER] Processing new image for patient: {patient_id}")
 
     client = vision.ImageAnnotatorClient()
-    with open(image_path, "rb") as image_file:
-        content = image_file.read()
 
+    # Preprocess to high-contrast grayscale — prevents LCD digits being
+    # misread as CJK characters (e.g. "100" → "昌")
+    content = preprocess_image(image_path)
     image = vision.Image(content=content)
     response = client.text_detection(image=image)
     texts = response.text_annotations
