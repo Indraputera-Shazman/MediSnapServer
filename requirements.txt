@@ -3,4 +3,4 @@ Werkzeug
 google-cloud-vision
 firebase-admin
 gunicorn
-pillow
+Pillow
