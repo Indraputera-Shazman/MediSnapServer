@@ -27,7 +27,7 @@ def extract_with_gemini(image_path):
     Far more reliable than OCR + regex for LCD 7-segment displays.
     Returns (systolic, diastolic, heart_rate) or (None, None, None).
     """
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.0-flash')
 
     with open(image_path, 'rb') as f:
         image_data = f.read()
