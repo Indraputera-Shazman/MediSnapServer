@@ -1,5 +1,5 @@
 Flask
 Werkzeug
 firebase-admin
-gunicorn
+gunicorn==21.2.0
 google-generativeai
