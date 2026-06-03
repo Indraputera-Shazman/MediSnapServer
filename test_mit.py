@@ -128,6 +128,15 @@ def parse_sequential(full_text):
     if len(numbers) < 2:
         return None, None, None
 
+    # Recover dropped leading "1": OCR often misses the thin leading stroke on
+    # LCD displays (e.g. "115" → "15"). If the first number is 2 digits and
+    # below 60, prepend "1" and check if it lands in a valid SYS range.
+    if numbers[0] < 60 and len(str(numbers[0])) == 2:
+        candidate = int('1' + str(numbers[0]))
+        if 100 <= candidate <= 199:
+            print(f"[SERVER] Recovering dropped leading digit: {numbers[0]} → {candidate}")
+            numbers[0] = candidate
+
     # Match positionally; validate ranges
     label_order = [k for k in ['sys', 'dia', 'bpm'] if k in label_positions]
     results = {}
@@ -200,6 +209,12 @@ def parse_by_coordinates(word_annotations):
         )
         for n in unused:
             v = n['value']
+            # Try to recover a dropped leading "1" (e.g. "15" → "115")
+            if v < 60 and len(str(v)) == 2:
+                candidate = int('1' + str(v))
+                if 100 <= candidate <= 199:
+                    print(f"[SERVER] Coord fallback: recovering {v} → {candidate}")
+                    v = candidate
             if 'sys' not in results and 60 <= v <= 250:
                 results['sys'] = v
             elif 'dia' not in results and 40 <= v <= 150:
