@@ -4,3 +4,4 @@ google-cloud-vision
 firebase-admin
 gunicorn
 Pillow
+google-generativeai
