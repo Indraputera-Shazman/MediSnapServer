@@ -1,130 +1,86 @@
-import os
-import re
-import datetime
-from flask import Flask, request
-from google.cloud import vision
-import firebase_admin
-from firebase_admin import credentials
-from firebase_admin import firestore
+if not reading.is_valid:
+        log.error("Could not extract a valid SYS/DIA pair.")
+        return {
+            'success':   False,
+            'reason':    'Incomplete reading',
+            'warnings':  reading.warnings,
+            'reading':   None,
+        }
 
-# --- 1. SETUP CLOUD SERVICES ---
-os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = 'google_key.json'
-cred = credentials.Certificate('firebase_key.json')
-firebase_admin.initialize_app(cred)
-db = firestore.client()
+    log.info(
+        "Parsed → SYS: %s  DIA: %s  BPM: %s  (confidence: %.0f%%)",
+        reading.systolic, reading.diastolic, reading.heart_rate,
+        reading.confidence * 100,
+    )
 
-# --- 2. SETUP FLASK SERVER ---
-app = Flask(__name__)
+    data = reading.to_dict(patient_id)
+    db.collection('readings').add(data)
+    log.info("Uploaded to Firestore ✓")
 
-def process_and_upload(image_path, patient_id):
-    print(f"\n[SERVER] Processing new image for patient: {patient_id}")
-    client = vision.ImageAnnotatorClient()
+    return {
+        'success':    True,
+        'patient_id': patient_id,
+        'reading': {
+            'systolic':   reading.systolic,
+            'diastolic':  reading.diastolic,
+            'heart_rate': reading.heart_rate,
+            'confidence': reading.confidence,
+        },
+        'warnings': reading.warnings,
+    }
 
-    with open(image_path, "rb") as image_file:
-        content = image_file.read()
-
-    image = vision.Image(content=content)
-    response = client.text_detection(image=image)
-    
-    texts = response.text_annotations
-    if not texts:
-        print("[SERVER] No text found.")
-        return
-
-    word_annotations = texts[1:]
-    
-    valid_numbers = []
-    labels_y = {} 
-    
-    # STEP 1: Scan all words for numbers and labels
-    for word in word_annotations:
-        text = word.description.lower()
-        y_coord = word.bounding_poly.vertices[0].y
-        
-        clean_text = re.sub(r'[^a-z]', '', text)
-        
-        if 'sys' in clean_text:
-            labels_y['sys'] = y_coord
-        elif 'dia' in clean_text:
-            labels_y['dia'] = y_coord
-        elif 'pul' in clean_text or 'bpm' in clean_text or 'bp' in clean_text:
-            labels_y['bpm'] = y_coord
-            
-        if word.description.isdigit() and 2 <= len(word.description) <= 3:
-            valid_numbers.append({'value': int(word.description), 'y': y_coord})
-
-    systolic = None
-    diastolic = None
-    heart_rate = None
-
-    # STEP 2: Match numbers to labels
-    if len(valid_numbers) >= 2:
-        
-        def pop_closest_number(target_y):
-            if not valid_numbers: return None
-            closest_idx = min(range(len(valid_numbers)), key=lambda i: abs(valid_numbers[i]['y'] - target_y))
-            return valid_numbers.pop(closest_idx)['value']
-
-        if 'sys' in labels_y:
-            systolic = pop_closest_number(labels_y['sys'])
-        if 'dia' in labels_y:
-            diastolic = pop_closest_number(labels_y['dia'])
-        if 'bpm' in labels_y:
-            heart_rate = pop_closest_number(labels_y['bpm'])
-            
-        # STEP 3: Fallback mechanism
-        valid_numbers = sorted(valid_numbers, key=lambda k: k['y'])
-        
-        if systolic is None and valid_numbers:
-            systolic = valid_numbers.pop(0)['value']
-        if diastolic is None and valid_numbers:
-            diastolic = valid_numbers.pop(0)['value']
-        if heart_rate is None and valid_numbers:
-            heart_rate = valid_numbers.pop(0)['value']
-            
-        print(f"[SERVER] Parsed -> SYS: {systolic}, DIA: {diastolic}, BPM: {heart_rate}")
-        
-        if systolic and diastolic:
-            health_data = {
-                'patient_id': patient_id,  # <--- Using the dynamic ID here
-                'systolic': systolic,
-                'diastolic': diastolic,
-                'heart_rate': heart_rate,
-                'timestamp': datetime.datetime.now()
-            }
-            
-            db.collection('readings').add(health_data)
-            print("[SERVER] SUCCESS: Uploaded to Firebase!")
-        else:
-            print("[SERVER] Error: Failed to assign Systolic and Diastolic values.")
-    else:
-        print(f"[SERVER] Error: Not enough valid numbers found. Found: {[n['value'] for n in valid_numbers]}")
 
 # --- 3. THE LISTENER ---
+
 @app.route('/upload', methods=['POST'])
 def handle_upload():
-    print("\n[SERVER] Receiving connection from app...")
-    
-    # Grab the patient_id from the URL (defaults to 'unknown_patient' if not provided)
-    patient_id = request.args.get('patient_id', 'unknown_patient')
-    
-    file_data = request.get_data()
-    
-    if not file_data:
-        return "No image data received", 400
-        
-    temp_image_path = f"temp_{patient_id}_reading.jpg"
-    
-    with open(temp_image_path, "wb") as f:
-        f.write(file_data)
-        
-    # Pass the ID into the processing function
-    process_and_upload(temp_image_path, patient_id)
-    
-    return "Upload and Processing Complete!", 200
+    log.info("Incoming upload request")
 
-if __name__ == '__main__':
-    print("=========================================")
-    print(" MediSnap Server is RUNNING and LISTENING ")
-    print("=========================================")
-    app.run(host='0.0.0.0', port=5000)
+    # ── Patient ID validation ─────────────────────────────────────────────────
+    raw_id     = request.args.get('patient_id', '')
+    patient_id = sanitize_patient_id(raw_id)
+    valid, reason = validate_patient_id(patient_id)
+
+    if not valid:
+        log.warning("Rejected upload — %s", reason)
+        return jsonify({'error': reason}), 400
+
+    # ── Image data ────────────────────────────────────────────────────────────
+    file_data = request.get_data()
+    if not file_data:
+        return jsonify({'error': 'No image data received'}), 400
+
+    # Safe temp filename (patient_id is already sanitised)
+    temp_path = f"/tmp/medisnap_{patient_id}_{datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S')}.jpg"
+
+    try:
+        with open(temp_path, 'wb') as f:
+            f.write(file_data)
+
+        result = process_and_upload(temp_path, patient_id)
+
+    except RuntimeError as e:
+        log.error("Processing error: %s", e)
+        return jsonify({'error': str(e)}), 500
+
+    finally:
+        # Always clean up temp file
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+            log.debug("Temp file removed: %s", temp_path)
+
+    status_code = 200 if result['success'] else 422
+    return jsonify(result), status_code
+
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Simple liveness probe."""
+    return jsonify({'status': 'ok', 'timestamp': datetime.datetime.utcnow().isoformat()}), 200
+
+
+if name == 'main':
+    print("=" * 50)
+    print("  MediSnap Server  —  RUNNING ON :5000")
+    print("=" * 50)
+    app.run(host='0.0.0.0', port=5000, debug=False)
